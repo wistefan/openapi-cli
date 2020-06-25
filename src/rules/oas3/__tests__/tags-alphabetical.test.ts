@@ -5,20 +5,22 @@ import { LintConfig } from '../../../config/config';
 import { validateDocument } from '../../../validate';
 import { parseYamlToDocument, replaceSourceWithRef } from '../../../__tests__/utils';
 
-describe('Oas3 oas3-server-trailing-slash', () => {
-  it('oas3-server-trailing-slash: should report on server object with trailing slash', async () => {
+describe('Oas3 tags-alphabetical', () => {
+  it('should report on tags object if not sorted alphabetically', async () => {
     const document = parseYamlToDocument(
       outdent`
           openapi: 3.0.0
-          servers:
-            - url: https://somedomain.com/
+          paths: {}
+          tags:
+            - name: b
+            - name: a
         `,
       'foobar.yaml',
     );
 
     const results = await validateDocument({
       document,
-      config: new LintConfig({ extends: [], rules: { 'server-trailing-slash': 'error' } }),
+      config: new LintConfig({ extends: [], rules: { 'tags-alphabetical': 'error' } }),
     });
 
     expect(replaceSourceWithRef(results)).toMatchInlineSnapshot(`
@@ -26,13 +28,13 @@ describe('Oas3 oas3-server-trailing-slash', () => {
         Object {
           "location": Array [
             Object {
-              "pointer": "#/servers/0/url",
+              "pointer": "#/tags/0",
               "reportOnKey": false,
               "source": "foobar.yaml",
             },
           ],
-          "message": "Server URL should not have a trailing slash.",
-          "ruleId": "server-trailing-slash",
+          "message": "The \\"tags\\" array should be in alphabetical order",
+          "ruleId": "tags-alphabetical",
           "severity": "error",
           "suggest": Array [],
         },
@@ -40,19 +42,21 @@ describe('Oas3 oas3-server-trailing-slash', () => {
     `);
   });
 
-  it('oas3-server-trailing-slash: should not report on server object with no trailing slash', async () => {
+  it('should not report on tags object if sorted alphabetically', async () => {
     const document = parseYamlToDocument(
       outdent`
-          openapi: 3.0.0
-          servers:
-            - url: https://somedomain.com
+      openapi: 3.0.0
+      paths: {}
+      tags:
+        - name: a
+        - name: b
         `,
       'foobar.yaml',
     );
 
     const results = await validateDocument({
       document,
-      config: new LintConfig({ extends: [], rules: { 'server-trailing-slash': 'error' } }),
+      config: new LintConfig({ extends: [], rules: { 'tags-alphabetical': 'error' } }),
     });
 
     expect(replaceSourceWithRef(results)).toMatchInlineSnapshot(`Array []`);

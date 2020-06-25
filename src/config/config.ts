@@ -24,8 +24,7 @@ export type RuleConfig =
   | 'off'
   | {
       severity?: MessageSeverity;
-      options?: Record<string, any>;
-    };
+    } & Record<string, any>;
 
 export type TransformerConfig =
   | MessageSeverity
@@ -76,7 +75,9 @@ export class LintConfig {
   plugins: Plugin[];
   rules: Record<string, RuleConfig>;
   transformers: Record<string, TransformerConfig>;
-  ignore: Record<string, Record<string, Record<string, boolean>>> = {};
+  exceptions: Record<string, Record<string, Set<string>>> = {};
+
+  private _usedRules: Set<string> = new Set();
 
   constructor(public rawConfig: RulesConfig, public configFile?: string) {
     this.plugins = rawConfig.plugins ? resolvePlugins(rawConfig.plugins, configFile) : [];
@@ -104,15 +105,18 @@ export class LintConfig {
     this.transformers = merged.transformers;
 
     const dir = this.configFile ? path.dirname(this.configFile) : process.cwd();
-    const ignoreFile = path.join(dir, EXCEPTIONS_FILE);
+    const exceptionsFile = path.join(dir, EXCEPTIONS_FILE);
 
-    if (fs.existsSync(ignoreFile)) {
-      this.ignore = yaml.safeLoad(fs.readFileSync(ignoreFile, 'utf-8')); // TODO: parse errors
+    if (fs.existsSync(exceptionsFile)) {
+      this.exceptions = yaml.safeLoad(fs.readFileSync(exceptionsFile, 'utf-8')); // TODO: parse errors
 
       // resolve ignore paths
-      for (const fileName of Object.keys(this.ignore)) {
-        this.ignore[path.resolve(dirname(ignoreFile), fileName)] = this.ignore[fileName];
-        delete this.ignore[fileName];
+      for (const fileName of Object.keys(this.exceptions)) {
+        this.exceptions[path.resolve(dirname(exceptionsFile), fileName)] = this.exceptions[fileName];
+        for (const ruleId of Object.keys(this.exceptions[fileName])) {
+          this.exceptions[fileName][ruleId] = new Set(this.exceptions[fileName][ruleId]);
+        }
+        delete this.exceptions[fileName];
       }
     }
   }
@@ -121,30 +125,33 @@ export class LintConfig {
     const dir = this.configFile ? path.dirname(this.configFile) : process.cwd();
     const ignoreFile = path.join(dir, EXCEPTIONS_FILE);
     const mapped: Record<string, any> = {};
-    for (const absFileName of Object.keys(this.ignore)) {
-      mapped[path.relative(dir, absFileName)] = this.ignore[absFileName];
+    for (const absFileName of Object.keys(this.exceptions)) {
+      const ruleExceptions = mapped[path.relative(dir, absFileName)] = this.exceptions[absFileName];
+      for (const ruleId of Object.keys(ruleExceptions)) {
+        ruleExceptions[ruleId] = Array.from(ruleExceptions[ruleId]) as any;
+      }
     }
     fs.writeFileSync(ignoreFile, yaml.safeDump(mapped));
   }
 
   addException(message: NormalizedReportMessage) {
-    const ignore = this.ignore;
+    const ignore = this.exceptions;
     const loc = message.location[0];
     if (loc.pointer === undefined) return;
 
     const fileIgnore = (ignore[loc.source.absoluteRef] = ignore[loc.source.absoluteRef] || {});
-    const ruleIgnore = fileIgnore[message.ruleId] = fileIgnore[message.ruleId] || {};
+    const ruleIgnore = fileIgnore[message.ruleId] = fileIgnore[message.ruleId] || new Set();
 
-    ruleIgnore[loc.pointer] = true;
+    ruleIgnore.add(loc.pointer);
   }
 
-  addMessageIsIgnored(message: NormalizedReportMessage) {
+  addMessageToExceptions(message: NormalizedReportMessage) {
     const loc = message.location[0];
     if (loc.pointer === undefined) return message;
 
-    const fileIgnore = this.ignore[loc.source.absoluteRef] || {};
-    const ruleIgnore = fileIgnore[message.ruleId] || {};
-    const ignored = ruleIgnore[loc.pointer];
+    const fileIgnore = this.exceptions[loc.source.absoluteRef] || {};
+    const ruleIgnore = fileIgnore[message.ruleId];
+    const ignored = ruleIgnore && ruleIgnore.has(loc.pointer);
     return ignored
       ? {
         ...message,
@@ -173,11 +180,11 @@ export class LintConfig {
   }
 
   getRuleSettings(ruleId: string) {
+    this._usedRules.add(ruleId);
     const settings = this.rules[ruleId] || 'off';
     if (typeof settings === 'string') {
       return {
         severity: settings,
-        options: undefined,
       };
     } else {
       return { severity: 'error' as 'error', ...settings };
@@ -185,14 +192,21 @@ export class LintConfig {
   }
 
   getTransformerSettings(ruleId: string) {
+    this._usedRules.add(ruleId);
     const settings = this.transformers[ruleId] || 'off';
     if (typeof settings === 'string') {
       return {
         severity: settings === 'on' ? ('error' as 'error') : settings,
-        options: undefined,
       };
     } else {
       return { severity: 'error' as 'error', ...settings };
+    }
+  }
+
+  getUnusedRules() {
+    return {
+      rules: Object.keys(this.rules).filter(name => !this._usedRules.has(name)),
+      transformers: Object.keys(this.transformers).filter(name => !this._usedRules.has(name)),
     }
   }
 
@@ -205,6 +219,22 @@ export class LintConfig {
         return oas3Rules;
       default:
         throw new Error('Not implemented');
+    }
+  }
+
+  skipRules(rules?: string[]) {
+    for (const ruleId of (rules || [])) {
+      if (this.rules[ruleId]) {
+        this.rules[ruleId] = 'off';
+      }
+    }
+  }
+
+  skipTransformers(transformers?: string[]) {
+    for (const transformerId of (transformers || [])) {
+      if (this.transformers[transformerId]) {
+        this.transformers[transformerId] = 'off';
+      }
     }
   }
 }

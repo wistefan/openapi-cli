@@ -59,24 +59,9 @@ export async function bundleDocument(opts: {
         oasVersion: OasVersion.Version3_0,
       };
 
-      if (transformers.length) {
-        const transformerVisitors = normalizeVisitors(transformers, types);
-        const resolvedRefMap = await resolveDocument({
-          rootDocument: document,
-          rootType: types.DefinitionRoot,
-          externalRefResolver,
-        });
-        walkDocument({
-          document,
-          rootType: types.DefinitionRoot as NormalizedNodeType,
-          normalizedVisitors: transformerVisitors,
-          resolvedRefMap,
-          ctx,
-        });
-      }
-
       const bundleVisitor = normalizeVisitors(
         [
+          ...transformers,
           {
             severity: 'error',
             ruleId: 'bundler',
@@ -102,7 +87,7 @@ export async function bundleDocument(opts: {
 
       return {
         bundle: document.parsed,
-        messages: ctx.messages.map((message) => config.addMessageIsIgnored(message)),
+        messages: ctx.messages.map((message) => config.addMessageToExceptions(message)),
       };
     }
   }

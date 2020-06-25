@@ -1,6 +1,6 @@
 import { Oas3Rule } from '../../visitors';
 
-export const OpenapiTagsAlphabetical: Oas3Rule = () => {
+export const TagsAlphabetical: Oas3Rule = () => {
   return {
     DefinitionRoot(root, { report, location }) {
       if (!root.tags) return;
@@ -8,7 +8,7 @@ export const OpenapiTagsAlphabetical: Oas3Rule = () => {
         if (root.tags[i].name > root.tags[i + 1].name) {
           report({
             message: 'The "tags" array should be in alphabetical order',
-            location: location.append(['tags', i]),
+            location: location.child(['tags', i]),
           });
         }
       }

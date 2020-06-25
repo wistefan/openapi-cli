@@ -1,6 +1,6 @@
 import { Oas3Rule } from '../../visitors';
 
-export const OperationDescription: Oas3Rule = () => {
+export const NoEmptyServers: Oas3Rule = () => {
   return {
     DefinitionRoot(root, { report, location }) {
       if (!root.servers) {
@@ -13,7 +13,7 @@ export const OperationDescription: Oas3Rule = () => {
       if (!Array.isArray(root.servers) || root.servers.length === 0) {
         report({
           message: 'OpenAPI servers must a non-empty array.',
-          location: location.append(['servers']),
+          location: location.child(['servers']),
         });
       }
     },

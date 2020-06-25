@@ -58,25 +58,9 @@ export async function validateDocument(opts: {
       };
 
       const transformers = initRules(oas3Rules, config, true);
-
-      if (transformers.length) {
-        const transformerVisitors = normalizeVisitors(transformers, types);
-        const resolvedRefMap = await resolveDocument({
-          rootDocument: document,
-          rootType: types.DefinitionRoot,
-          externalRefResolver,
-        });
-        walkDocument({
-          document,
-          rootType: types.DefinitionRoot,
-          normalizedVisitors: transformerVisitors,
-          resolvedRefMap,
-          ctx,
-        });
-      }
-
       const visitors = initRules(oas3Rules, config, false);
-      const normalizedVisitors = normalizeVisitors(visitors, types);
+
+      const normalizedVisitors = normalizeVisitors([...transformers, ...visitors], types);
 
       const resolvedRefMap = await resolveDocument({
         rootDocument: document,
@@ -92,7 +76,7 @@ export async function validateDocument(opts: {
         ctx,
       });
 
-      return ctx.messages.map((message) => config.addMessageIsIgnored(message));
+      return ctx.messages.map((message) => config.addMessageToExceptions(message));
     }
   }
 }

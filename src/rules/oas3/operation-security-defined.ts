@@ -18,7 +18,7 @@ export const OperationSecurityDefined: Oas3Rule = () => {
           for (const reportedFromLocation of scheme.from) {
             report({
               message: `There is no "${name}" security scheme defined.`,
-              location: { ...reportedFromLocation, reportOnKey: true },
+              location: reportedFromLocation.key(),
             });
           }
         }
@@ -33,7 +33,7 @@ export const OperationSecurityDefined: Oas3Rule = () => {
     SecurityRequirement(requirements, { location }) {
       for (const requirement of Object.keys(requirements)) {
         const authScheme = referencedSchemes.get(requirement);
-        const requirementLocation = location.append([requirement]);
+        const requirementLocation = location.child([requirement]);
         if (!authScheme) {
           referencedSchemes.set(requirement, { from: [requirementLocation] });
         } else {

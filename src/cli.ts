@@ -6,14 +6,15 @@ import { validate } from './validate';
 
 import { bundle } from './bundle';
 import { dumpBundle, saveBundle, BundleOutputFormat } from './utils';
-import { formatMessages } from './format/format';
+import { formatMessages, OutputFormat } from './format/format';
 import { ResolveError, YamlParseError } from './resolve';
-import { loadConfig, Config } from './config/config';
+import { loadConfig, Config, LintConfig } from './config/config';
 import { NormalizedReportMessage } from './walk';
 import { red, green, yellow, blue, gray } from 'colorette';
 import { performance } from 'perf_hooks';
 
 const outputExtensions = ['json', 'yaml', 'yml'] as ReadonlyArray<BundleOutputFormat>;
+
 
 yargs // eslint-disable-line
   .version()
@@ -29,8 +30,8 @@ yargs // eslint-disable-line
         })
         .option('format', {
           description: 'Reduce output to required minimum.',
-          choices: ['short', 'detailed'] as ReadonlyArray<'detailed' | 'short'>,
-          default: 'detailed' as 'detailed' | 'short',
+          choices: ['stylish', 'codeframe'] as ReadonlyArray<OutputFormat>,
+          default: 'codeframe' as OutputFormat,
         })
         .option('max-messages', {
           requiresArg: true,
@@ -42,6 +43,16 @@ yargs // eslint-disable-line
           description: 'Generate exceptions file',
           type: 'boolean',
         })
+        .option('skip-rule', {
+          description: 'ignore certain rules',
+          array: true,
+          type: 'string',
+        })
+        .option('skip-transformer', {
+          description: 'ignore certain transformers',
+          array: true,
+          type: 'string',
+        })
         .option('config', {
           description: 'Specify custom config file',
           requiresArg: true,
@@ -49,15 +60,19 @@ yargs // eslint-disable-line
         }),
     async (argv) => {
       const config = await loadConfig(argv.config);
+      config.lint.skipRules(argv["skip-rule"]);
+      config.lint.skipTransformers(argv["skip-transformer"]);
+
       const entrypoints = getFallbackEntryPointsOrExit(argv.entrypoints, config);
 
       if (argv['generate-exceptions']) {
-        // clear ignore
-        config.lint.ignore = {};
+        config.lint.exceptions = {}; // clear ignore
       }
 
       const totals: Totals = { errors: 0, warnings: 0, ignored: 0 };
       let totalExceptions = 0;
+
+      // TODO: use shared externalRef resolver, blocked by transformers now as they mutate documents
       for (const entryPoint of entrypoints) {
         try {
           const startedAt = performance.now();
@@ -84,19 +99,28 @@ yargs // eslint-disable-line
           }
 
           const elapsed = `${Math.ceil(performance.now() - startedAt)}ms`;
-          process.stderr.write(`${blue(entryPoint)}: validated in ${elapsed}\n\n`);
+          if(process.env.NODE_ENV !== 'test') {
+            process.stderr.write(`${blue(entryPoint)}: validated in ${elapsed}\n\n`);
+          }
         } catch (e) {
           totals.errors++;
           handleError(e, entryPoint);
         }
       }
 
-      if (argv['generate-exceptions'])  {
+      if (argv['generate-exceptions']) {
         config.lint.saveExceptions();
-        process.stderr.write(`Added ${totalExceptions} ${pluralize('message', totalExceptions)} to exceptions file\n\n`);
+        process.stderr.write(
+          `Added ${totalExceptions} ${pluralize(
+            'message',
+            totalExceptions,
+          )} to exceptions file\n\n`,
+        );
       } else {
         printLintTotals(totals, entrypoints.length);
       }
+
+      printUnusedWarnings(config.lint);
       process.exit(totals.errors === 0 || argv['generate-exceptions'] ? 0 : 1);
     },
   )
@@ -115,8 +139,8 @@ yargs // eslint-disable-line
         })
         .option('format', {
           description: 'Reduce output to required minimum.',
-          choices: ['short', 'detailed'] as ReadonlyArray<'detailed' | 'short'>,
-          default: 'detailed' as 'detailed' | 'short',
+          choices: ['stylish', 'codeframe'] as ReadonlyArray<OutputFormat>,
+          default: 'codeframe' as OutputFormat,
         })
         .option('max-messages', {
           requiresArg: true,
@@ -129,6 +153,16 @@ yargs // eslint-disable-line
           requiresArg: true,
           choices: outputExtensions,
         })
+        .option('skip-rule', {
+          description: 'ignore certain rules',
+          array: true,
+          type: 'string',
+        })
+        .option('skip-transformer', {
+          description: 'ignore certain transformers',
+          array: true,
+          type: 'string',
+        })
         .option('force', {
           alias: 'f',
           description: 'Produce bundle output file even if validation errors were encountered',
@@ -139,6 +173,9 @@ yargs // eslint-disable-line
         }),
     async (argv) => {
       const config = await loadConfig(argv.config);
+      config.lint.skipRules(argv["skip-rule"]);
+      config.lint.skipTransformers(argv["skip-transformer"]);
+
       const entrypoints = getFallbackEntryPointsOrExit(argv.entrypoints, config);
 
       const totals: Totals = { errors: 0, warnings: 0, ignored: 0 };
@@ -204,6 +241,7 @@ yargs // eslint-disable-line
         }
       }
 
+      printUnusedWarnings(config.lint);
       process.exit(totals.errors === 0 || argv.force ? 0 : 1);
     },
   )
@@ -256,7 +294,9 @@ function handleError(e: Error, ref: string) {
 }
 
 function printLintTotals(totals: Totals, definitionsCount: number) {
-  const ignored = totals.ignored ? yellow(`${totals.ignored} ${pluralize('message is', totals.ignored)} explicitly ignored\n`) : '';
+  const ignored = totals.ignored
+    ? yellow(`${totals.ignored} ${pluralize('message is', totals.ignored)} explicitly ignored\n`)
+    : '';
 
   if (totals.errors > 0) {
     process.stderr.write(
@@ -275,7 +315,12 @@ function printLintTotals(totals: Totals, definitionsCount: number) {
     );
   } else {
     process.stderr.write(
-      green(`Woohoo! Your OpenAPI ${pluralize('definition is', definitionsCount)} valid 🎉. ${ignored}\n`),
+      green(
+        `Woohoo! Your OpenAPI ${pluralize(
+          'definition is',
+          definitionsCount,
+        )} valid 🎉. ${ignored}\n`,
+      ),
     );
   }
 
@@ -342,4 +387,22 @@ function getFallbackEntryPointsOrExit(argsEntrypoints: string[] | undefined, con
   }
 
   return res;
+}
+
+function printUnusedWarnings(config: LintConfig) {
+  const { transformers, rules } = config.getUnusedRules();
+  if (rules.length) {
+    process.stderr.write(
+      yellow(`Unknown rules found in ${blue(config.configFile || '')}: ${rules.join(', ')}\n`),
+    );
+  }
+  if (transformers.length) {
+    process.stderr.write(
+      yellow(`[WARN} Unknown transformers found in ${blue(config.configFile || '')}: ${transformers.join(', ')}\n`),
+    );
+  }
+
+  if (rules.length || transformers.length) {
+    process.stderr.write(`Check the spelling and verify you added plugin prefix\n`);
+  }
 }
