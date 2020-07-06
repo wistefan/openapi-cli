@@ -1,4 +1,5 @@
 import { NodeType, listOf, mapOf } from '.';
+import { isMappingRef } from '../ref-utils';
 
 const responseCodeRegexp = /^[0-9][0-9Xx]{2}$/;
 
@@ -6,9 +7,9 @@ const DefinitionRoot: NodeType = {
   properties: {
     openapi: null,
     info: 'Info',
-    tags: listOf('Tag'),
     servers: listOf('Server'),
     security: listOf('SecurityRequirement'),
+    tags: listOf('Tag'),
     externalDocs: 'ExternalDocs',
     paths: 'PathMap',
     components: 'Components',
@@ -54,9 +55,7 @@ const ServerVariable: NodeType = {
   properties: {
     enum: {
       type: 'array',
-      items: {
-        type: 'string',
-      },
+      items: { type: 'string' },
     },
     default: {
       type: 'string',
@@ -68,9 +67,7 @@ const ServerVariable: NodeType = {
 
 const SecurityRequirement: NodeType = {
   properties: {},
-  additionalProperties() {
-    return { type: 'array', items: { type: 'string' } };
-  },
+  additionalProperties: { type: 'array', items: { type: 'string' } },
 };
 
 const Info: NodeType = {
@@ -122,7 +119,8 @@ const License: NodeType = {
 
 const PathMap: NodeType = {
   properties: {},
-  additionalProperties: (_value: any, key: string) => (key.startsWith('/') ? 'PathItem' : null),
+  additionalProperties: (_value: any, key: string) =>
+    key.startsWith('/') ? 'PathItem' : undefined,
 };
 
 const PathItem: NodeType = {
@@ -188,9 +186,7 @@ const Operation: NodeType = {
   properties: {
     tags: {
       type: 'array',
-      items: {
-        type: 'string',
-      },
+      items: { type: 'string' },
     },
     summary: {
       type: 'string',
@@ -212,8 +208,16 @@ const Operation: NodeType = {
       type: 'boolean',
     },
     callbacks: 'PathMap',
-    // 'x-codeSamples'?: Oas3XCodeSample[]; // TODO: x-code-samples
-    // 'x-code-samples'?: Oas3XCodeSample[]; // deprecated
+    'x-codeSamples': listOf('XCodeSample'),
+    'x-code-samples': listOf('XCodeSample'), // deprecated
+  },
+  required: ['responses'],
+};
+
+const XCodeSample: NodeType = {
+  properties: {
+    lang: { type: 'string' },
+    source: { type: 'string', referenceable: true },
   },
 };
 
@@ -232,7 +236,7 @@ const RequestBody: NodeType = {
 
 const MediaTypeMap: NodeType = {
   properties: {},
-  additionalProperties: () => 'MediaType',
+  additionalProperties: 'MediaType',
 };
 
 const MediaType: NodeType = {
@@ -312,7 +316,7 @@ const ResponsesMap: NodeType = {
     default: 'Response',
   },
   additionalProperties: (_v: any, key: string) =>
-    responseCodeRegexp.test(key) ? 'Response' : null,
+    responseCodeRegexp.test(key) ? 'Response' : undefined,
 };
 
 const Response: NodeType = {
@@ -406,22 +410,33 @@ const Xml: NodeType = {
 
 const SchemaProperties: NodeType = {
   properties: {},
-  additionalProperties: () => 'Schema',
+  additionalProperties: 'Schema',
+};
+
+const DiscriminatorMapping: NodeType = {
+  properties: {},
+  additionalProperties: (value: any) => {
+    if (isMappingRef(value)) {
+      return { type: 'string', directResolveAs: 'Schema' };
+    } else {
+      return { type: 'string' };
+    }
+  },
 };
 
 const Discriminator: NodeType = {
   properties: {
     propertyName: { type: 'string' },
-    mapping: { type: 'object' }, // TODO: validate mapping
+    mapping: 'DiscriminatorMapping',
   },
   required: ['propertyName'],
 };
 
 const Components: NodeType = {
   properties: {
+    parameters: 'NamedParameters',
     schemas: 'NamedSchemas',
     responses: 'NamedResponses',
-    parameters: 'NamedParameters',
     examples: 'NamedExamples',
     requestBodies: 'NamedRequestBodies',
     headers: 'NamedHeaders',
@@ -434,7 +449,7 @@ const Components: NodeType = {
 const ImplicitFlow: NodeType = {
   properties: {
     refreshUrl: { type: 'string' },
-    scopes: { type: 'object' }, // TODO: validate scopes
+    scopes: { type: 'object', additionalProperties: { type: 'string' } }, // TODO: validate scopes
     authorizationUrl: { type: 'string' },
   },
   required: ['authorizationUrl', 'scopes'],
@@ -443,7 +458,7 @@ const ImplicitFlow: NodeType = {
 const PasswordFlow: NodeType = {
   properties: {
     refreshUrl: { type: 'string' },
-    scopes: { type: 'object' }, // TODO: validate scopes
+    scopes: { type: 'object', additionalProperties: { type: 'string' } }, // TODO: validate scopes
     tokenUrl: { type: 'string' },
   },
   required: ['tokenUrl', 'scopes'],
@@ -452,7 +467,7 @@ const PasswordFlow: NodeType = {
 const ClientCredentials: NodeType = {
   properties: {
     refreshUrl: { type: 'string' },
-    scopes: { type: 'object' }, // TODO: validate scopes
+    scopes: { type: 'object', additionalProperties: { type: 'string' } }, // TODO: validate scopes
     tokenUrl: { type: 'string' },
   },
   required: ['tokenUrl', 'scopes'],
@@ -462,7 +477,7 @@ const AuthorizationCode: NodeType = {
   properties: {
     refreshUrl: { type: 'string' },
     authorizationUrl: { type: 'string' },
-    scopes: { type: 'object' }, // TODO: validate scopes
+    scopes: { type: 'object', additionalProperties: { type: 'string' } }, // TODO: validate scopes
     tokenUrl: { type: 'string' },
   },
   required: ['authorizationUrl', 'tokenUrl', 'scopes'],
@@ -489,6 +504,10 @@ const SecurityScheme: NodeType = {
     openIdConnectUrl: { type: 'string' },
   },
   required(value) {
+    if (!value?.type) {
+      return ['type'];
+    }
+
     if (value.type === 'apiKey') {
       return ['type', 'name', 'in'];
     } else if (value.type === 'http') {
@@ -529,6 +548,7 @@ export const Oas3Types: Record<string, NodeType> = {
   Schema,
   Xml,
   SchemaProperties,
+  DiscriminatorMapping,
   Discriminator,
   Components,
   NamedSchemas: mapOf('Schema'),
@@ -546,4 +566,5 @@ export const Oas3Types: Record<string, NodeType> = {
   AuthorizationCode,
   SecuritySchemeFlows,
   SecurityScheme,
+  XCodeSample,
 };

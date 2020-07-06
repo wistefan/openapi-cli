@@ -7,8 +7,9 @@ const { readFile } = fs.promises;
 import { OasRef } from './typings/openapi';
 import { isRef, joinPointer, escapePointer, parseRef, isAbsoluteUrl } from './ref-utils';
 import { safeLoad as safeLoadToAst, YAMLNode, Kind } from 'yaml-ast-parser';
-import { NormalizedNodeType } from './types';
+import { NormalizedNodeType, isNamedType } from './types';
 import { readFileFromUrl } from './utils';
+import { ResolveConfig } from './config/config';
 
 export type CollectedRefs = Map<string /* absoluteFilePath */, Document>;
 
@@ -77,6 +78,12 @@ export type Document = {
 export class BaseResolver {
   cache: Map<string, Promise<Document | ResolveError>> = new Map();
 
+  constructor(private config: ResolveConfig = { http: { headers: [] } }) {}
+
+  getFiles() {
+    return new Set(Array.from(this.cache.keys()));
+  }
+
   resolveExternalRef(base: string | null, ref: string): string {
     if (isAbsoluteUrl(ref)) {
       return ref;
@@ -92,7 +99,7 @@ export class BaseResolver {
   async loadExternalRef(absoluteRef: string): Promise<Source> {
     try {
       const body = isAbsoluteUrl(absoluteRef)
-        ? await readFileFromUrl(absoluteRef)
+        ? await readFileFromUrl(absoluteRef, this.config.http)
         : await readFile(absoluteRef, 'utf-8');
       return new Source(absoluteRef, body);
     } catch (error) {
@@ -101,7 +108,8 @@ export class BaseResolver {
   }
 
   parseDocument(source: Source): Document {
-    if (source.absoluteRef.endsWith('.md')) {
+    const ext = source.absoluteRef.substr(source.absoluteRef.lastIndexOf('.'));
+    if (!['.json', '.json', '.yml', '.yaml'].includes(ext)) {
       return { source, parsed: source.body };
     }
 
@@ -179,6 +187,7 @@ function hasRef(head: RefFrame | null, node: any): boolean {
 }
 
 const unknownType = { name: 'unknown', properties: {} };
+const resolvableScalarType = { name: 'scalar', properties: {} };
 
 export async function resolveDocument(opts: {
   rootDocument: Document;
@@ -219,10 +228,12 @@ export async function resolveDocument(opts: {
       if (seedNodes.has(nodeId)) {
         return;
       }
+
       seedNodes.add(nodeId);
 
       if (Array.isArray(node)) {
         const itemsType = type.items;
+        // we continue resolving unknown types, but stop early on known scalars
         if (type !== unknownType && itemsType === undefined) {
           return;
         }
@@ -233,25 +244,25 @@ export async function resolveDocument(opts: {
       }
 
       for (const propName of Object.keys(node)) {
-        const value = node[propName];
+        let propValue = node[propName];
+
         let propType = type.properties[propName];
-        if (propType !== undefined) {
-          propType = typeof propType === 'function' ? propType(value, propName) : propType;
-        } else {
-          propType = type.additionalProperties?.(value, propName);
+        if (propType === undefined) propType = type.additionalProperties;
+        if (typeof propType === 'function') propType = propType(propValue, propName);
+        if (propType === undefined) propType = unknownType;
+        if (propType && propType.name === undefined && propType.referenceable) {
+          propType = resolvableScalarType;
+        }
+        if (!isNamedType(propType) && propType?.directResolveAs) {
+          propType = propType.directResolveAs;
+          propValue = { $ref: propValue };
         }
 
-        propType = propType || unknownType;
-
-        if (propType.name === undefined && !propType.referenceable) {
+        if (!isNamedType(propType)) {
           continue;
         }
 
-        walk(
-          value,
-          propType.name === undefined ? { name: 'scalar', properties: {} } : propType,
-          joinPointer(nodeAbsoluteRef, escapePointer(propName)),
-        );
+        walk(propValue, propType, joinPointer(nodeAbsoluteRef, escapePointer(propName)));
       }
 
       if (isRef(node)) {
@@ -312,18 +323,18 @@ export async function resolveDocument(opts: {
 
       let target = targetDoc.parsed as any;
 
-      const segments = pointer.split('/').slice(1).map(escapePointer).filter(Boolean);
+      const segments = pointer;
       for (let segment of segments) {
         if (typeof target !== 'object') {
           target = undefined;
           break;
         } else if (target[segment] !== undefined) {
           target = target[segment];
-          resolvedRef.nodePointer = path.join(resolvedRef.nodePointer!, escapePointer(segment));
+          resolvedRef.nodePointer = joinPointer(resolvedRef.nodePointer!, escapePointer(segment));
         } else if (isRef(target)) {
           resolvedRef = await followRef(document, target, pushRef(refStack, target));
           target = resolvedRef.node[segment];
-          resolvedRef.nodePointer = path.join(resolvedRef.nodePointer!, escapePointer(segment));
+          resolvedRef.nodePointer = joinPointer(resolvedRef.nodePointer!, escapePointer(segment));
         } else {
           target = undefined;
           break;

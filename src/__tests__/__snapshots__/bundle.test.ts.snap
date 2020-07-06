@@ -18,12 +18,17 @@ components:
   parameters:
     param-a:
       name: param_a
+      schema:
+        $ref: '#/components/schemas/schema-a'
     path-param:
       name: path_param
-    param-b:
-      name: param_b
     param-c:
       name: param_c
+    param-b:
+      name: param_b
+  schemas:
+    schema-a:
+      type: string
 
 `;
 
@@ -46,12 +51,12 @@ components:
     param-a:
       name: test
     param-b:
-      name: param_b
+      name: param_b_alt
     path-param:
       name: path_param
-    param-b-2:
-      name: param_b
     param-c:
       name: param_c
+    param-b-2:
+      name: param_b
 
 `;

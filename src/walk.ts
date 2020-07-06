@@ -1,5 +1,6 @@
 import { Referenced } from './typings/openapi';
 import { Location, isRef } from './ref-utils';
+
 import {
   VisitorLevelContext,
   NormalizedOasVisitors,
@@ -10,13 +11,18 @@ import {
 import { ResolvedRefMap, Document, ResolveError, YamlParseError, Source } from './resolve';
 import { pushStack, popStack } from './utils';
 import { OasVersion } from './validate';
-import { NormalizedNodeType } from './types';
+import { NormalizedNodeType, isNamedType } from './types';
 
 type NonUndefined = string | number | boolean | symbol | bigint | object | Record<string, any>;
 
 export type ResolveResult<T extends NonUndefined> =
   | { node: T; location: Location; error?: ResolveError | YamlParseError }
   | { node: undefined; location: undefined; error?: ResolveError | YamlParseError };
+
+export type ResolveFn<T> = (
+  node: Referenced<T>,
+  from?: string,
+) => { location: Location; node: T } | { location: undefined; node: undefined };
 
 export type UserContext = {
   report(message: ReportMessage): void;
@@ -38,7 +44,7 @@ export type Loc = {
 
 export type PointerLocationObject = {
   source: Source;
-  reportOnKey: boolean;
+  reportOnKey?: boolean;
   pointer: string;
 };
 
@@ -50,12 +56,14 @@ export type LineColLocationObject = Omit<PointerLocationObject, 'pointer'> & {
 
 export type LocationObject = LineColLocationObject | PointerLocationObject;
 
-export type MessageSeverity = 'error' | 'warning';
+export type MessageSeverity = 'error' | 'warn';
 
 export type ReportMessage = {
   message: string;
   suggest?: string[];
   location?: Partial<LocationObject> | Array<Partial<LocationObject>>;
+  from?: LocationObject;
+  forceSeverity?: MessageSeverity;
 };
 
 export type NormalizedReportMessage = {
@@ -63,6 +71,7 @@ export type NormalizedReportMessage = {
   ruleId: string;
   severity: MessageSeverity;
   location: LocationObject[];
+  from?: LocationObject;
   suggest: string[];
   ignored?: boolean;
 };
@@ -122,7 +131,7 @@ export function walkDocument<T>(opts: {
       for (const { visit: visitor, ruleId, severity, context } of refEnterVisitors) {
         if (!seenRefs.has(node)) {
           enteredContexts.add(context);
-          const report = reportFn.bind(undefined, ruleId, severity);
+          const report = reportFn.bind(undefined, ruleId, severity, location);
           visitor(
             node,
             {
@@ -141,9 +150,7 @@ export function walkDocument<T>(opts: {
       }
     }
 
-    if (resolvedNode && newLocation && type.name !== 'scalar') {
-      location = newLocation;
-
+    if (resolvedNode !== undefined && newLocation && type.name !== 'scalar') {
       const isNodeSeen = seenNodesPerType[type.name]?.has?.(resolvedNode);
       let visitedBySome = false;
 
@@ -159,9 +166,10 @@ export function walkDocument<T>(opts: {
           if (
             context.parent.activatedOn &&
             !context.parent.activatedOn.value.nextLevelTypeActivated &&
-            !context.seen.has(resolvedNode)
+            !context.seen.has(node)
           ) {
-            context.seen.add(resolvedNode);
+            // TODO: test for walk through duplicated $ref-ed node
+            context.seen.add(node);
             visitedBySome = true;
             activatedContexts.push(context);
           }
@@ -178,7 +186,7 @@ export function walkDocument<T>(opts: {
 
             const activatedOn = {
               node: resolvedNode,
-              location,
+              location: newLocation,
               nextLevelTypeActivated: null,
               withParentNode: context.parent?.activatedOn?.value.node,
               skipped:
@@ -199,7 +207,7 @@ export function walkDocument<T>(opts: {
             if (!activatedOn.skipped) {
               visitedBySome = true;
               enteredContexts.add(context);
-              visitWithContext(visit, resolvedNode, context, ruleId, severity);
+              visitWithContext(visit, resolvedNode, context, newLocation, ruleId, severity);
             }
           }
         }
@@ -213,35 +221,44 @@ export function walkDocument<T>(opts: {
           const itemsType = type.items;
           if (itemsType !== undefined) {
             for (let i = 0; i < resolvedNode.length; i++) {
-              walkNode(resolvedNode[i], itemsType, location.child([i]), resolvedNode, i);
+              walkNode(resolvedNode[i], itemsType, newLocation.child([i]), resolvedNode, i);
             }
           }
         } else if (typeof resolvedNode === 'object' && resolvedNode !== null) {
-          // TODO: visit in order from type-tree
-          for (const propName of Object.keys(resolvedNode)) {
-            const value = resolvedNode[propName];
+          // visit in order from type-tree first
+          const props = Object.keys(type.properties);
+          if (type.additionalProperties) {
+            props.push(...Object.keys(resolvedNode).filter(k => !props.includes(k)));
+          }
+          for (const propName of props) {
+            let value = resolvedNode[propName];
+
             let propType = type.properties[propName];
-            if (propType !== undefined) {
-              propType = typeof propType === 'function' ? propType(value, propName) : propType;
-            } else {
-              propType = type.additionalProperties?.(value, propName);
+            if (propType === undefined) propType = type.additionalProperties;
+            if (typeof propType === 'function') propType = propType(value, propName);
+            if (propType && propType.name === undefined && propType.referenceable) {
+              propType = { name: 'scalar', properties: {} };
             }
-            if (propType == undefined || (propType.name === undefined && !propType.referenceable)) {
+
+            if (!isNamedType(propType) && propType?.directResolveAs) {
+              propType = propType.directResolveAs;
+              value = { $ref: value };
+            }
+
+            if (!isNamedType(propType)) {
               continue;
             }
-            walkNode(
-              value,
-              propType.name === undefined ? { name: 'scalar', properties: {} } : propType,
-              location.child([propName]),
-              resolvedNode,
-              propName,
-            );
+
+            walkNode(value, propType, newLocation.child([propName]), resolvedNode, propName);
           }
+
         }
       }
 
       const anyLeaveVisitors = normalizedVisitors.any.leave;
-      const currentLeaveVisitors = (normalizedVisitors[type.name]?.leave || []).concat(anyLeaveVisitors)
+      const currentLeaveVisitors = (normalizedVisitors[type.name]?.leave || []).concat(
+        anyLeaveVisitors,
+      );
 
       for (const context of activatedContexts.reverse()) {
         if (context.isSkippedLevel) {
@@ -262,7 +279,7 @@ export function walkDocument<T>(opts: {
 
       for (const { context, visit, ruleId, severity } of currentLeaveVisitors) {
         if (!context.isSkippedLevel && enteredContexts.has(context)) {
-          visitWithContext(visit, resolvedNode, context, ruleId, severity);
+          visitWithContext(visit, resolvedNode, context, newLocation, ruleId, severity);
         }
       }
     }
@@ -271,7 +288,7 @@ export function walkDocument<T>(opts: {
       const refLeaveVisitors = normalizedVisitors.ref.leave;
       for (const { visit: visitor, ruleId, severity, context } of refLeaveVisitors) {
         if (enteredContexts.has(context)) {
-          const report = reportFn.bind(undefined, ruleId, severity);
+          const report = reportFn.bind(undefined, ruleId, severity, location);
           visitor(
             node,
             {
@@ -294,16 +311,17 @@ export function walkDocument<T>(opts: {
       visit: VisitFunction<any>,
       node: any,
       context: VisitorLevelContext,
+      location: Location,
       ruleId: string,
       severity: MessageSeverity,
     ) {
-      const report = reportFn.bind(undefined, ruleId, severity);
+      const report = reportFn.bind(undefined, ruleId, severity, location);
       visit(
         node,
         {
           report,
           resolve,
-          location,
+          location: location,
           type,
           parent,
           key,
@@ -314,9 +332,13 @@ export function walkDocument<T>(opts: {
       );
     }
 
-    function resolve<T>(ref: Referenced<T>): ResolveResult<T> {
+    function resolve<T>(
+      ref: Referenced<T>,
+      from: string = location.source.absoluteRef,
+    ): ResolveResult<T> {
       if (!isRef(ref)) return { location, node: ref };
-      const refId = location.source.absoluteRef + '::' + ref.$ref;
+      const refId = from + '::' + ref.$ref;
+
       const resolvedRef = resolvedRefMap.get(refId);
       if (!resolvedRef) {
         return {
@@ -335,7 +357,7 @@ export function walkDocument<T>(opts: {
       return { location: newLocation, node, error };
     }
 
-    function reportFn(ruleId: string, severity: MessageSeverity, opts: ReportMessage) {
+    function reportFn(ruleId: string, severity: MessageSeverity, location: Location, opts: ReportMessage) {
       const loc = opts.location
         ? Array.isArray(opts.location)
           ? opts.location
@@ -344,9 +366,9 @@ export function walkDocument<T>(opts: {
 
       ctx.messages.push({
         ruleId,
-        severity: severity,
-        suggest: [],
+        severity: opts.forceSeverity || severity,
         ...opts,
+        suggest: opts.suggest || [],
         location: loc.map((loc: any) => {
           return { ...location, reportOnKey: false, ...loc };
         }),

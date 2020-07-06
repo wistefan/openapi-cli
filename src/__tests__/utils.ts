@@ -14,14 +14,25 @@ export function parseYamlToDocument(body: string, absoluteRef: string = ''): Doc
 }
 
 export function replaceSourceWithRef(results: NormalizedReportMessage[], cwd?: string) {
+  const cwdRegexp = cwd ? new RegExp(cwd + path.sep, 'g') : /$^/;
   return results.map((r) => {
-    return {
+    const mapped = {
       ...r,
+      message: r.message.replace(cwdRegexp, ''),
       location: r.location.map((l) => ({
         ...l,
         source: cwd ? path.relative(cwd, l.source.absoluteRef) : l.source.absoluteRef,
       })),
     };
+    if (mapped.from) {
+      mapped.from = {
+        ...mapped.from,
+        source: cwd
+          ? path.relative(cwd, mapped.from.source.absoluteRef)
+          : mapped.from.source.absoluteRef as any,
+      };
+    }
+    return mapped;
   });
 }
 
