@@ -4,7 +4,8 @@ import * as path from 'path';
 import { bundleDocument, bundle } from '../bundle';
 
 import { parseYamlToDocument, yamlSerializer } from './utils';
-import { LintConfig } from '../config/config';
+import { LintConfig, Config } from '../config/config';
+import { BaseResolver } from '../resolve';
 
 describe('bundle', () => {
   expect.addSnapshotSerializer(yamlSerializer);
@@ -37,6 +38,7 @@ describe('bundle', () => {
 
     const { bundle, messages } = await bundleDocument({
       document,
+      externalRefResolver: new BaseResolver(),
       config: new LintConfig({}),
     });
 
@@ -48,7 +50,7 @@ describe('bundle', () => {
 
   it('should bundle external refs', async () => {
     const { bundle: res, messages } = await bundle({
-      config: new LintConfig({}),
+      config: new Config({}),
       ref: path.join(__dirname, 'fixtures/refs/openapi-with-external-refs.yaml'),
     });
     expect(messages).toHaveLength(0);
@@ -57,12 +59,12 @@ describe('bundle', () => {
 
   it('should bundle external refs and warn for conflicting names', async () => {
     const { bundle: res, messages } = await bundle({
-      config: new LintConfig({}),
+      config: new Config({}),
       ref: path.join(__dirname, 'fixtures/refs/openapi-with-external-refs-conflicting-names.yaml'),
     });
     expect(messages).toHaveLength(1);
     expect(messages[0].message).toEqual(
-      `Two schemas are referenced with the same name but different content. Renamed param-b to param-b-2`,
+      `Two schemas are referenced with the same name but different content. Renamed param-b to param-b-2.`,
     );
     expect(res).toMatchSnapshot();
   });

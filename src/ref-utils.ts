@@ -2,6 +2,7 @@ import { Source } from './resolve';
 import { OasRef } from './typings/openapi';
 
 export function joinPointer(base: string, key: string | number) {
+  if (base === '') base = '#/';
   return base[base.length - 1] === '/' ? base + key : base + '/' + key;
 }
 
@@ -27,7 +28,7 @@ export class Location {
   }
 
   get absolutePointer() {
-    return this.source.absoluteRef + this.pointer;
+    return this.source.absoluteRef + (this.pointer === '#/' ? '' : this.pointer)
   }
 }
 
@@ -40,11 +41,11 @@ export function escapePointer<T extends string | number>(fragment: T): T {
   return (fragment as string).replace(/~/g, '~0').replace(/\//g, '~1') as T;
 }
 
-export function parseRef(ref: string): { uri: string | null; pointer: string } {
+export function parseRef(ref: string): { uri: string | null; pointer: string[] } {
   const [uri, pointer] = ref.split('#/');
   return {
     uri: uri || null,
-    pointer: '#/' + (pointer || ''),
+    pointer: pointer ? pointer.split('/').map(escapePointer).filter(Boolean) : []
   };
 }
 
@@ -64,4 +65,13 @@ export function refBaseName(ref: string) {
 
 export function isAbsoluteUrl(ref: string) {
   return ref.startsWith('http://') || ref.startsWith('https://');
+}
+
+export function isMappingRef(mapping: string ) {
+  // TODO: proper detection of mapping refs
+  return mapping.startsWith('#') ||
+      mapping.startsWith('https://') ||
+      mapping.startsWith('./') ||
+      mapping.startsWith('../') ||
+      mapping.indexOf('/') > -1
 }

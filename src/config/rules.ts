@@ -1,21 +1,24 @@
-import { RuleSet } from '../validate';
+import { RuleSet, OasVersion } from '../validate';
 import { LintConfig } from './config';
 import { notUndefined } from '../utils';
 
 export function initRules<T extends Function, P extends RuleSet<T>>(
   rules: P[],
   config: LintConfig,
-  transformers: boolean = false,
+  type: 'rules' | 'preprocessors' | 'decorators',
+  oasVersion: OasVersion,
 ) {
   return rules
     .flatMap((ruleset) =>
-      // TODO: validate rules from config have corresponding rule defined for specific Oas version
       Object.keys(ruleset).map((ruleId) => {
         const rule = ruleset[ruleId];
 
-        const transformerSettings = config.getTransformerSettings(ruleId);
-        const ruleSetting = config.getRuleSettings(ruleId);
-        const ruleSettings = transformers ? transformerSettings : ruleSetting;
+        const ruleSettings =
+          type === 'rules'
+            ? config.getRuleSettings(ruleId, oasVersion)
+            : type === 'preprocessors'
+            ? config.getPreprocessorSettings(ruleId, oasVersion)
+            : config.getDecoratorSettings(ruleId, oasVersion);
 
         if (ruleSettings.severity === 'off') {
           return undefined;
